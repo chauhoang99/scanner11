@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="QuantBreakout — OANDA", layout="wide")
 
-OANDA_GRANULARITY = {"M15":"M15","H1":"H1","H4":"H4","D1":"D","W1":"W","MN":"M"}
+OANDA_GRANULARITY = {"M15":"M15","H1":"H1","H4":"H4", "H8": "H8","D1":"D","W1":"W","MN":"M"}
 DEFAULT_INSTRUMENTS = [
     "EUR_USD","GBP_USD","USD_JPY","AUD_USD","USD_CAD","NZD_USD",
     "EUR_JPY","GBP_JPY","USD_CHF","EUR_GBP","AUD_JPY","CAD_JPY",
