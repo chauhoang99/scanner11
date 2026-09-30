@@ -21,10 +21,29 @@ def get_secret(name, default=""):
     except Exception:
         return os.getenv(name, default)
 
+
+def oanda_host(environment):
+    return "https://api-fxpractice.oanda.com" if environment == "practice" else "https://api-fxtrade.oanda.com"
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def discover_account_id(token, environment):
+    r = requests.get(f"{oanda_host(environment)}/v3/accounts", headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    if not r.ok: raise RuntimeError(f"OANDA {r.status_code}: {r.text[:500]}")
+    accounts = r.json().get("accounts", [])
+    if not accounts: raise RuntimeError("No OANDA accounts are authorized for this API token.")
+    return accounts[0]["id"]
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_oanda_instruments(token, environment, account_id):
+    r = requests.get(f"{oanda_host(environment)}/v3/accounts/{account_id}/instruments", headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    if not r.ok: raise RuntimeError(f"OANDA {r.status_code}: {r.text[:500]}")
+    items = r.json().get("instruments", [])
+    items.sort(key=lambda x: (x.get("type",""), x.get("displayName", x.get("name",""))))
+    return items
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_oanda_candles(token, environment, instrument, granularity, count):
-    host = "https://api-fxpractice.oanda.com" if environment == "practice" else "https://api-fxtrade.oanda.com"
-    url = f"{host}/v3/instruments/{instrument}/candles"
+    url = f"{oanda_host(environment)}/v3/instruments/{instrument}/candles"
     headers = {"Authorization": f"Bearer {token}"}
     # OANDA caps a single candles request at 5000.
     params = {"price":"M", "granularity":granularity, "count":min(int(count), 5000)}
@@ -188,7 +207,21 @@ with st.sidebar:
     token = get_secret("OANDA_API_KEY") or get_secret("OANDA_API_TOKEN")
     if not token:
         token = st.text_input("OANDA API token", type="password")
-    instrument = st.selectbox("Instrument", DEFAULT_INSTRUMENTS)
+    account_id = get_secret("OANDA_ACCOUNT_ID")
+    if token:
+        try:
+            if not account_id:
+                account_id = discover_account_id(token, environment)
+            instrument_meta = fetch_oanda_instruments(token, environment, account_id)
+            instrument_names = [x["name"] for x in instrument_meta]
+            meta_by_name = {x["name"]: x for x in instrument_meta}
+            default_idx = instrument_names.index("EUR_USD") if "EUR_USD" in instrument_names else 0
+            instrument = st.selectbox(f"Instrument ({len(instrument_names)} available)", instrument_names, index=default_idx, format_func=lambda x: f'{meta_by_name[x].get("displayName", x)} · {x} · {meta_by_name[x].get("type","")}')
+        except Exception as e:
+            st.warning(f"Could not load all OANDA instruments: {e}")
+            instrument = st.selectbox("Instrument (fallback list)", DEFAULT_INSTRUMENTS)
+    else:
+        instrument = st.selectbox("Instrument", DEFAULT_INSTRUMENTS)
     tf = st.radio("Timeframe", list(OANDA_GRANULARITY), index=1, horizontal=True)
     lookback = st.slider("Historical lookback bars", 300, 5000, 1000, 100)
     forward = st.slider("Breakout window (forward bars)", 1, 10, 3)
