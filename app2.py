@@ -98,14 +98,22 @@ def fetch_oanda_candles(token, environment, instrument, granularity, count):
         raise RuntimeError("OANDA returned no completed candles.")
     return df.reset_index(drop=True)
 
-def find_type1(df):
-    """The Strat Type 1: current candle is contained by the previous candle."""
+def find_setups(df, candle_type):
+    """Find The Strat Type 1 or Type 2 candles."""
     setups = []
     for i in range(1, len(df)):
         cur = df.iloc[i]
         prev = df.iloc[i - 1]
-        if cur.high <= prev.high and cur.low >= prev.low:
-            setups.append(i)
+        inside = cur.high <= prev.high and cur.low >= prev.low
+        breaks_high = cur.high > prev.high
+        breaks_low = cur.low < prev.low
+
+        if candle_type == "Type 1":
+            if inside:
+                setups.append(i)
+        else:  # Type 2 = breaks exactly one side of previous candle
+            if breaks_high != breaks_low:
+                setups.append(i)
     return setups
 
 def analyze_type1(df, setup_indices, forward_bars):
@@ -113,8 +121,8 @@ def analyze_type1(df, setup_indices, forward_bars):
     For each Type 1 candle, observe the next N completed candles.
 
     A side is considered broken by PRICE TRADE/WICK:
-      high side: a future high > Type 1 high
-      low side:  a future low  < Type 1 low
+      high side: a future high > selected candle high
+      low side:  a future low  < selected candle low
 
     Outcomes:
       Both sides   = both high and low are broken within N bars
@@ -181,9 +189,9 @@ def analyze_type1(df, setup_indices, forward_bars):
 
     return pd.DataFrame(rows)
 
-st.title("The Strat — Type 1 Break Probability")
+st.title("The Strat — Type 1 / Type 2 Break Probability")
 st.caption(
-    "Measures what happens after a completed Type 1 (inside) candle using real completed OANDA midpoint candles."
+    "Measures what happens after a completed Strat Type 1 or Type 2 candle using real completed OANDA midpoint candles."
 )
 
 with st.sidebar:
@@ -227,6 +235,8 @@ with st.sidebar:
         default_idx = DEFAULT_INSTRUMENTS.index("CAD_SGD")
         instrument = st.selectbox("Instrument", DEFAULT_INSTRUMENTS, index=default_idx)
 
+    candle_type = st.radio("Candle Type", ["Type 1", "Type 2"], horizontal=True)
+
     tf_keys = list(OANDA_GRANULARITY)
     tf = st.radio(
         "Timeframe",
@@ -259,8 +269,8 @@ except Exception as e:
     st.error(str(e))
     st.stop()
 
-type1_indices = find_type1(df)
-results = analyze_type1(df, type1_indices, forward_bars)
+setup_indices = find_setups(df, candle_type)
+results = analyze_type1(df, setup_indices, forward_bars)
 
 st.caption(
     f"Source: OANDA v20 ({environment}) • {instrument} • {tf} • "
@@ -268,7 +278,7 @@ st.caption(
 )
 
 if results.empty:
-    st.warning("No Type 1 setups with a complete forward observation window were found.")
+    st.warning("No selected candle-type setups with a complete forward observation window were found.")
     st.stop()
 
 n = len(results)
@@ -285,7 +295,7 @@ both_prob = 100 * both / n
 neither_prob = 100 * neither / n
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Type 1 samples", f"{n:,}")
+c1.metric(f"{candle_type} samples", f"{n:,}")
 c2.metric("One side only", f"{one_prob:.1f}%", f"{one_side} samples")
 c3.metric("Both sides", f"{both_prob:.1f}%", f"{both} samples")
 c4.metric("Neither side", f"{neither_prob:.1f}%", f"{neither} samples")
@@ -305,13 +315,13 @@ st.bar_chart(
     .set_index("Outcome")["Probability %"]
 )
 
-st.subheader("Type 1 observations")
+st.subheader(f"{candle_type} observations")
 st.dataframe(results, use_container_width=True, hide_index=True)
 
 st.download_button(
     "Export Type 1 Results (CSV)",
     results.to_csv(index=False).encode(),
-    f"Strat_Type1_{instrument}_{tf}_{forward_bars}bars.csv",
+    f"Strat_{candle_type.replace(' ', '')}_{instrument}_{tf}_{forward_bars}bars.csv",
     "text/csv",
 )
 
@@ -319,10 +329,11 @@ with st.expander("Exact definitions used"):
     st.markdown(
         """
 - **Type 1:** current high ≤ previous high AND current low ≥ previous low.
-- **High broken:** within the selected forward window, a future candle's high is above the Type 1 high.
-- **Low broken:** within the selected forward window, a future candle's low is below the Type 1 low.
+- **Type 2:** breaks exactly one side of the previous candle: 2U breaks the previous high but not its low; 2D breaks the previous low but not its high.
+- **High broken:** within the selected forward window, a future candle's high is above the selected candle high.
+- **Low broken:** within the selected forward window, a future candle's low is below the selected candle low.
 - **One side only:** exactly one side is broken during the entire observation window.
-- **Both sides:** both the Type 1 high and Type 1 low are broken during the observation window, regardless of which breaks first.
+- **Both sides:** both the selected candle high and selected candle low are broken during the observation window, regardless of which breaks first.
 - **Neither:** neither side is broken during the observation window.
 - Wick/traded-price breaks count; a closing-price break is not required.
         """
