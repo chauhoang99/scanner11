@@ -152,6 +152,8 @@ def analyze_setups(df, setup_indices, forward_bars):
         low_broken = False
         high_break_bar = None
         low_break_bar = None
+        high_break_close_outside = None
+        low_break_close_outside = None
 
         end_i = min(len(df) - 1, i + forward_bars)
         available = end_i - i
@@ -166,22 +168,28 @@ def analyze_setups(df, setup_indices, forward_bars):
             if not high_broken and bar.high > hi:
                 high_broken = True
                 high_break_bar = j - i
+                high_break_close_outside = bool(bar.close > hi)
 
             if not low_broken and bar.low < lo:
                 low_broken = True
                 low_break_bar = j - i
+                low_break_close_outside = bool(bar.close < lo)
 
             if high_broken and low_broken:
                 break
 
         if high_broken and low_broken:
             outcome = "Both sides"
+            one_side_close = None
         elif high_broken:
             outcome = "High only"
+            one_side_close = "Close outside" if high_break_close_outside else "Close back in"
         elif low_broken:
             outcome = "Low only"
+            one_side_close = "Close outside" if low_break_close_outside else "Close back in"
         else:
             outcome = "Neither"
+            one_side_close = None
 
         rows.append({
             "Setup Bar": i,
@@ -190,6 +198,7 @@ def analyze_setups(df, setup_indices, forward_bars):
             "Range High": hi,
             "Range Low": lo,
             "Outcome": outcome,
+            "One Side Close": one_side_close,
             "High Broken": high_broken,
             "Low Broken": low_broken,
             "High Break After Bars": high_break_bar,
@@ -302,6 +311,9 @@ counts = results["Outcome"].value_counts()
 high_only = int(counts.get("High only", 0))
 low_only = int(counts.get("Low only", 0))
 one_side = high_only + low_only
+one_side_rows = results[results["Outcome"].isin(["High only", "Low only"])]
+close_outside = int((one_side_rows["One Side Close"] == "Close outside").sum())
+close_back_in = int((one_side_rows["One Side Close"] == "Close back in").sum())
 both = int(counts.get("Both sides", 0))
 neither = int(counts.get("Neither", 0))
 
@@ -309,25 +321,28 @@ one_prob = 100 * one_side / n
 both_prob = 100 * both / n
 neither_prob = 100 * neither / n
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 sample_label = candle_type if candle_type != "Type 3" or type3_subtype == "All Type 3" else f"Type 3 — {type3_subtype}"
 c1.metric(f"{sample_label} samples", f"{n:,}")
-c2.metric("One side only", f"{one_prob:.1f}%", f"{one_side} samples")
-c3.metric("Both sides", f"{both_prob:.1f}%", f"{both} samples")
-c4.metric("Neither side", f"{neither_prob:.1f}%", f"{neither} samples")
+c2.metric("One side — Close outside", f"{100 * close_outside / n:.1f}%", f"{close_outside} samples")
+c3.metric("One side — Close back in", f"{100 * close_back_in / n:.1f}%", f"{close_back_in} samples")
+c4.metric("Both sides", f"{both_prob:.1f}%", f"{both} samples")
+c5.metric("Neither side", f"{neither_prob:.1f}%", f"{neither} samples")
 
 st.subheader("Outcome probabilities")
 summary = pd.DataFrame([
     {"Outcome": "High only", "Samples": high_only, "Probability %": round(100 * high_only / n, 2)},
     {"Outcome": "Low only", "Samples": low_only, "Probability %": round(100 * low_only / n, 2)},
-    {"Outcome": "One side only (High + Low)", "Samples": one_side, "Probability %": round(one_prob, 2)},
+    {"Outcome": "One side — Close outside", "Samples": close_outside, "Probability %": round(100 * close_outside / n, 2)},
+    {"Outcome": "One side — Close back in", "Samples": close_back_in, "Probability %": round(100 * close_back_in / n, 2)},
+    {"Outcome": "One side only (total)", "Samples": one_side, "Probability %": round(one_prob, 2)},
     {"Outcome": "Both sides", "Samples": both, "Probability %": round(both_prob, 2)},
     {"Outcome": "Neither side", "Samples": neither, "Probability %": round(neither_prob, 2)},
 ])
 st.dataframe(summary, use_container_width=True, hide_index=True)
 
 st.bar_chart(
-    summary[summary["Outcome"].isin(["One side only (High + Low)", "Both sides", "Neither side"])]
+    summary[summary["Outcome"].isin(["One side — Close outside", "One side — Close back in", "Both sides", "Neither side"])]
     .set_index("Outcome")["Probability %"]
 )
 
@@ -353,7 +368,8 @@ with st.expander("Exact definitions used"):
 - The three Type 3 categories are mutually exclusive: a combined candle is counted only as **Outside + Engulfing**.
 - **High broken:** a future high is above the selected candle high.
 - **Low broken:** a future low is below the selected candle low.
-- **One side only:** exactly one side breaks within the observation window.
+- **One side — Close outside:** exactly one side breaks during the observation window, and the candle that first breaks that side also closes beyond that range boundary.
+- **One side — Close back in:** exactly one side breaks during the observation window, but the candle that first breaks that side closes back inside the selected candle's high/low range.
 - **Both sides:** both sides break within the observation window.
 - **Neither:** neither side breaks.
 - Wick/traded-price breaks count; a closing-price break is not required.
